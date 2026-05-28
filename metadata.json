@@ -1,0 +1,6 @@
+{
+  "name": "NBS Compliant Payslip Generator",
+  "description": "A South African Section 33 compliant payslip generator and calculator for Nkuna Burial Society, featuring SARS PAYE estimating, UIF statutory capping, and local 3-year storage registry.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
