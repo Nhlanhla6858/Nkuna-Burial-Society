@@ -25,12 +25,12 @@ const LOCAL_STORAGE_KEY = 'nbs_payslip_records';
 export default function App() {
   // 1. Initial State Configurations
   const initialEmployer: EmployerDetails = {
-    companyName: 'NKUNA BURIAL SOCIETY',
-    address: 'Plot 24, Bronkhorstspruit Road, Pretoria East, 0002, South Africa',
-    coRegNo: '2015/098432/08',
-    payeRef: '7100784321', // compliant 10-digit tax ref starting with 7
-    uifRef: 'U100784321',
-    contact: 'info@nkunaburial.co.za / +27 (0)12 809 3982',
+    companyName: '',
+    address: '',
+    coRegNo: '',
+    payeRef: '',
+    uifRef: '',
+    contact: '',
   };
 
   const initialEmployee: EmployeeDetails = {
@@ -42,6 +42,12 @@ export default function App() {
     payPeriodEnd: new Date(new Date().getFullYear(), new Date().getMonth() + 1, 0).toISOString().substring(0, 10),
     payDate: new Date(new Date().getFullYear(), new Date().getMonth() + 1, 0).toISOString().substring(0, 10),
     ageGroup: 'under65',
+    annualLeaveAccrued: 15,
+    annualLeaveTaken: 0,
+    sickLeaveAccrued: 30,
+    sickLeaveTaken: 0,
+    familyLeaveAccrued: 5,
+    familyLeaveTaken: 0,
   };
 
   const initialEarnings: Earnings = {
@@ -78,6 +84,58 @@ export default function App() {
     other: 0,
   });
   const [useAutoYtd, setUseAutoYtd] = useState(true);
+  
+  // Auto-save & Local Draft states
+  const [lastAutoSave, setLastAutoSave] = useState<string | null>(null);
+  
+  const draftRef = React.useRef({ employer, employee, earnings, deductions, ytdOffsets, useAutoYtd });
+
+  useEffect(() => {
+    draftRef.current = { employer, employee, earnings, deductions, ytdOffsets, useAutoYtd };
+  }, [employer, employee, earnings, deductions, ytdOffsets, useAutoYtd]);
+
+  // Load draft from localStorage on initial render
+  useEffect(() => {
+    try {
+      const draftStored = localStorage.getItem('nbs_payslip_draft');
+      if (draftStored) {
+        const draft = JSON.parse(draftStored);
+        if (draft.employer) setEmployer(draft.employer);
+        if (draft.employee) setEmployee(draft.employee);
+        if (draft.earnings) setEarnings(draft.earnings);
+        if (draft.deductions) setDeductions(draft.deductions);
+        if (draft.ytdOffsets) setYtdOffsets(draft.ytdOffsets);
+        if (typeof draft.useAutoYtd === 'boolean') setUseAutoYtd(draft.useAutoYtd);
+        setLastAutoSave('Restored');
+      }
+    } catch (err) {
+      console.error('Failed to load local storage draft:', err);
+    }
+  }, []);
+
+  // 30-second Auto-save Interval
+  useEffect(() => {
+    const interval = setInterval(() => {
+      try {
+        const { employer, employee, earnings, deductions, ytdOffsets, useAutoYtd } = draftRef.current;
+        
+        // Only auto-save if some user data is configured to avoid empty drafts
+        const hasData = !!(employee.name || employee.occupation || employee.idNumber || earnings.basicSalary > 0);
+        
+        if (hasData) {
+          const draftPayload = { employer, employee, earnings, deductions, ytdOffsets, useAutoYtd };
+          localStorage.setItem('nbs_payslip_draft', JSON.stringify(draftPayload));
+          
+          const timeString = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+          setLastAutoSave(timeString);
+        }
+      } catch (err) {
+        console.error('Failed to auto-save draft:', err);
+      }
+    }, 30000);
+
+    return () => clearInterval(interval);
+  }, []);
   
   // Historical Records (Statutory 3-Year Archive)
   const [records, setRecords] = useState<PayslipRecord[]>([]);
@@ -264,6 +322,14 @@ export default function App() {
 
   // 3. System Handlers
   const handleLoadDemo = () => {
+    setEmployer({
+      companyName: 'NKUNA BURIAL SOCIETY',
+      address: 'Plot 24, Bronkhorstspruit Road, Pretoria East, 0002, South Africa',
+      coRegNo: '2015/098432/08',
+      payeRef: '7100784321',
+      uifRef: 'U100784321',
+      contact: 'info@nkunaburial.co.za / +27 (0)12 809 3982',
+    });
     setEmployee({
       name: 'Sipho Khumalo',
       occupation: 'Senior Cemetery & Family Consultant',
@@ -273,6 +339,12 @@ export default function App() {
       payPeriodEnd: '2026-05-31',
       payDate: '2026-05-31',
       ageGroup: 'under65',
+      annualLeaveAccrued: 18,
+      annualLeaveTaken: 4,
+      sickLeaveAccrued: 30,
+      sickLeaveTaken: 3,
+      familyLeaveAccrued: 5,
+      familyLeaveTaken: 1,
     });
     setEarnings({
       basicSalary: 16500,
@@ -293,9 +365,26 @@ export default function App() {
   };
 
   const handleClear = () => {
+    setEmployer(initialEmployer);
     setEmployee(initialEmployee);
     setEarnings(initialEarnings);
     setDeductions(initialDeductions);
+    setYtdOffsets({
+      basicSalary: 0,
+      commission: 0,
+      allowance: 0,
+      paye: 0,
+      uif: 0,
+      pension: 0,
+      other: 0,
+    });
+    setUseAutoYtd(true);
+    setLastAutoSave(null);
+    try {
+      localStorage.removeItem('nbs_payslip_draft');
+    } catch (err) {
+      console.error('Failed to clear draft from local storage:', err);
+    }
     showToast('All editor values safely reset', 'info');
   };
 
@@ -462,9 +551,20 @@ export default function App() {
             {/* Left Hand: Config Inputs */}
             <div className="lg:col-span-5 flex flex-col gap-6 print:hidden">
               <div className="flex flex-col">
-                <h1 className="font-sans font-black text-2xl tracking-tight text-slate-800 leading-tight">
-                  SARS & BCEA Payslip Generator
-                </h1>
+                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+                  <h1 className="font-sans font-black text-2xl tracking-tight text-slate-800 leading-tight">
+                    SARS & BCEA Payslip Generator
+                  </h1>
+                  {lastAutoSave && (
+                    <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-50 border border-emerald-100 text-emerald-800 text-[10px] font-bold select-none shadow-sm animate-fade-in shrink-0 self-start sm:self-center">
+                      <span className="relative flex h-1.5 w-1.5">
+                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                        <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-emerald-500"></span>
+                      </span>
+                      {lastAutoSave === 'Restored' ? 'Draft Restored' : `Auto-saved ${lastAutoSave}`}
+                    </div>
+                  )}
+                </div>
                 <p className="text-slate-500 text-xs mt-1 leading-normal">
                   Calculate and archive South African labour law compliant payslips with absolute precision.
                 </p>

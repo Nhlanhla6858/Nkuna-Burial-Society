@@ -16,6 +16,12 @@ export interface EmployeeDetails {
   payPeriodEnd: string;
   payDate: string;
   ageGroup: 'under65' | '65to74' | '75plus';
+  annualLeaveAccrued?: number;
+  annualLeaveTaken?: number;
+  sickLeaveAccrued?: number;
+  sickLeaveTaken?: number;
+  familyLeaveAccrued?: number;
+  familyLeaveTaken?: number;
 }
 
 export interface Earnings {

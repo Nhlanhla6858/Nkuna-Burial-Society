@@ -82,6 +82,8 @@ export function PayslipPreview({
   const [portalError, setPortalError] = useState('');
   const [downloadingPdf, setDownloadingPdf] = useState(false);
   const [downloadCompleted, setDownloadCompleted] = useState(false);
+  const [generatingPdf, setGeneratingPdf] = useState(false);
+  const [stampOpacity, setStampOpacity] = useState(0.55);
   
   // Audit delivery timeline (compliance logs)
   const [outboxHistory, setOutboxHistory] = useState<Array<{
@@ -103,6 +105,106 @@ export function PayslipPreview({
   // Primary Print Action (triggers browser-native print of optimized printable element)
   const handlePrint = () => {
     window.print();
+  };
+
+  // Client-side dynamic high-resolution PDF download utilizing HTML5 canvas vector rendering
+  const handleDownloadPdfFile = async () => {
+    const element = payslipRef.current;
+    if (!element) return;
+
+    setGeneratingPdf(true);
+    try {
+      const html2canvas = (await import('html2canvas')).default;
+      const { jsPDF } = await import('jspdf');
+
+      // Setup exact options for html2canvas to render at crisp high-def scale
+      const canvas = await html2canvas(element, {
+        scale: 2, // Double DPI resolution for super crisp digital printout
+        useCORS: true,
+        logging: false,
+        backgroundColor: '#ffffff',
+        windowWidth: 800, // Lock the width layout to expected A4 preview size
+        onclone: (clonedDoc) => {
+          // 1. Hide interactive elements or components labeled as print-hidden
+          const hiddenElements = clonedDoc.querySelectorAll('.print\\:hidden');
+          hiddenElements.forEach(el => {
+            (el as HTMLElement).style.setProperty('display', 'none', 'important');
+          });
+
+          // 2. Ensure elements visible ONLY in print view are compiled to active block
+          const blockElements = clonedDoc.querySelectorAll('.print\\:block');
+          blockElements.forEach(el => {
+            if (el.classList.contains('hidden')) {
+              (el as HTMLElement).classList.remove('hidden');
+            }
+            (el as HTMLElement).style.setProperty('display', 'block', 'important');
+          });
+
+          // 3. Perfect the layout elements specifically inside the sheet inside the cloned DOM
+          const clonedSheet = clonedDoc.getElementById('compliance-a4-playslip-sheet');
+          if (clonedSheet) {
+            clonedSheet.style.setProperty('box-shadow', 'none', 'important');
+            clonedSheet.style.setProperty('border', 'none', 'important');
+            clonedSheet.style.setProperty('border-radius', '0', 'important');
+            clonedSheet.style.setProperty('background', 'white', 'important');
+            clonedSheet.style.setProperty('background-image', 'none', 'important');
+            clonedSheet.style.setProperty('padding', '35px', 'important'); // Balanced margins for PDF
+            clonedSheet.style.setProperty('margin', '0', 'important');
+            clonedSheet.style.setProperty('width', '800px', 'important');
+            clonedSheet.style.setProperty('min-height', 'auto', 'important');
+          }
+        }
+      });
+
+      const imgData = canvas.toDataURL('image/png', 1.0);
+      const pdf = new jsPDF({
+        orientation: 'p',
+        unit: 'mm',
+        format: 'a4',
+        compress: true
+      });
+
+      // Standard A4 dimensions in millimeters are 210 x 297
+      const pdfWidth = 210;
+      const pdfHeight = 297;
+      
+      const imgWidth = pdfWidth;
+      const imgHeight = (canvas.height * pdfWidth) / canvas.width;
+
+      pdf.addImage(imgData, 'PNG', 0, 0, imgWidth, imgHeight, undefined, 'FAST');
+      
+      // Handle page flow division safely if content spans multi-page
+      let heightLeft = imgHeight - pdfHeight;
+      let position = -pdfHeight;
+
+      while (heightLeft > 0) {
+        pdf.addPage();
+        pdf.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight, undefined, 'FAST');
+        heightLeft -= pdfHeight;
+        position -= pdfHeight;
+      }
+
+      // Generate contextually descriptive SA payroll ledger filename
+      const employeeNameClean = employee.name ? employee.name.replace(/[^a-z0-9]/gi, '_') : 'Employee';
+      const periodClean = employee.payPeriodEnd ? employee.payPeriodEnd.substring(0, 10) : new Date().toISOString().substring(0, 10);
+      const filename = `NBS_Payslip_${employeeNameClean}_${periodClean}.pdf`;
+
+      pdf.save(filename);
+      
+      // Register this event in the local audit outbox log ledger
+      const logItem = {
+        id: `pdf-dl-${Date.now()}`,
+        timestamp: new Date().toLocaleTimeString('en-ZA', { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+        method: 'Audit-Safe PDF Generated & Saved',
+        recipient: employee.name || 'NBS Employee',
+        secured: true
+      };
+      setOutboxHistory(prev => [logItem, ...prev]);
+    } catch (err) {
+      console.error('Failed to export high precision PDF:', err);
+    } finally {
+      setGeneratingPdf(false);
+    }
   };
 
   // Generate dynamic URL for employee portal links
@@ -202,24 +304,64 @@ export function PayslipPreview({
   return (
     <div className="flex flex-col gap-4" id="payslip-preview-container">
       {/* Upper Utility Controller Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-slate-800 text-white p-4 rounded-xl shadow-sm print:hidden">
-        <div>
-          <h3 className="font-sans font-bold text-sm flex items-center gap-1.5">
-            <ShieldCheck className="w-4 h-4 text-emerald-400" />
-            Live Compliant Preview
-          </h3>
-          <p className="text-[10px] text-slate-300">Format ready for premium letterhead A4 printing</p>
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 bg-slate-800 text-white p-4 rounded-xl shadow-sm print:hidden">
+        <div className="flex flex-col sm:flex-row sm:items-center gap-4">
+          <div>
+            <h3 className="font-sans font-bold text-sm flex items-center gap-1.5">
+              <ShieldCheck className="w-4 h-4 text-emerald-400" />
+              Live Compliant Preview
+            </h3>
+            <p className="text-[10px] text-slate-300">Format ready for premium letterhead A4 printing</p>
+          </div>
+
+          {/* Opacity slider for compliance stamp */}
+          <div className="flex items-center gap-2 bg-slate-700/50 border border-slate-600/50 px-3 py-1.5 rounded-lg">
+            <label htmlFor="stamp-opacity-slider" className="text-[10px] uppercase tracking-wider font-extrabold text-slate-300 select-none">
+              Stamp Opacity:
+            </label>
+            <input 
+              type="range"
+              id="stamp-opacity-slider"
+              min="0"
+              max="1"
+              step="0.05"
+              value={stampOpacity}
+              onChange={(e) => setStampOpacity(parseFloat(e.target.value))}
+              className="w-20 accent-emerald-400 cursor-pointer h-1 rounded-full appearance-none bg-slate-600 focus:outline-none"
+            />
+            <span className="text-[10px] font-mono font-bold text-slate-200 text-right w-8">
+              {Math.round(stampOpacity * 100)}%
+            </span>
+          </div>
         </div>
 
         <div className="flex items-center gap-2">
           {/* Print button */}
           <button
             onClick={handlePrint}
-            className="flex items-center gap-1.5 px-3 py-1.5 bg-red-600 hover:bg-red-700 font-bold rounded-lg text-xs leading-none transition"
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-red-600 hover:bg-red-700 font-bold rounded-lg text-xs leading-none transition cursor-pointer"
             id="print-payslip-primary-btn"
           >
             <Printer className="w-3.5 h-3.5" />
             Print / PDF
+          </button>
+
+          {/* Download PDF button */}
+          <button
+            onClick={handleDownloadPdfFile}
+            disabled={generatingPdf}
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-[#1B2A7E] hover:bg-[#131E5B] text-white font-bold rounded-lg text-xs leading-none transition disabled:opacity-60 disabled:cursor-not-allowed cursor-pointer"
+            id="download-pdf-primary-btn"
+          >
+            {generatingPdf ? (
+              <svg className="animate-spin h-3.5 w-3.5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+              </svg>
+            ) : (
+              <Download className="w-3.5 h-3.5" />
+            )}
+            {generatingPdf ? 'Generating...' : 'Download PDF'}
           </button>
 
           {/* Email button */}
@@ -302,6 +444,63 @@ export function PayslipPreview({
               <div className="flex justify-between border-b border-gray-200 pb-1 text-sm">
                 <span className="font-bold text-[#1B2A7E] uppercase text-xs shrink-0 self-center">Employee ID/Ref:</span>
                 <span className="text-gray-900 font-mono font-medium text-right leading-none self-center">{employee.idNumber || '____________'}</span>
+              </div>
+            </div>
+
+            {/* BCEA STATUTORY LEAVE BALANCES (BCEA Sec 20, 22, 27) */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3.5 p-3.5 border border-slate-200/60 bg-slate-50/50 rounded-lg z-10 text-xs">
+              {/* Annual Leave */}
+              <div className="flex flex-col justify-between border-b sm:border-b-0 sm:border-r border-gray-200 pb-2 sm:pb-0 sm:pr-3">
+                <div className="flex justify-between items-center mb-1">
+                  <span className="font-extrabold text-[#1B2A7E] text-[10px] uppercase tracking-wide">1. Annual Leave</span>
+                  <span className="font-mono text-[8px] text-gray-400">BCEA Sec 20</span>
+                </div>
+                <div className="grid grid-cols-2 text-[10px] text-gray-600 mb-1.5">
+                  <div>Accrued: <strong className="font-mono text-gray-800">{(employee.annualLeaveAccrued ?? 15)}d</strong></div>
+                  <div>Taken: <strong className="font-mono text-gray-800">{(employee.annualLeaveTaken ?? 0)}d</strong></div>
+                </div>
+                <div className="border-t border-dashed border-gray-200 pt-1.5 flex justify-between items-center text-[10.5px] font-bold text-gray-700">
+                  <span>Balance remaining:</span>
+                  <span className="font-mono text-[#1B2A7E] bg-blue-50/70 border border-blue-105/30 px-1.5 py-0.5 rounded leading-none text-[10px]">
+                    {Math.max(0, (employee.annualLeaveAccrued ?? 15) - (employee.annualLeaveTaken ?? 0))} Days
+                  </span>
+                </div>
+              </div>
+
+              {/* Sick Leave */}
+              <div className="flex flex-col justify-between border-b sm:border-b-0 sm:border-r border-gray-200 pb-2 sm:pb-0 sm:px-1 sm:pr-3">
+                <div className="flex justify-between items-center mb-1">
+                  <span className="font-extrabold text-red-950 text-[10px] uppercase tracking-wide">2. Sick Leave</span>
+                  <span className="font-mono text-[8px] text-gray-400">BCEA Sec 22</span>
+                </div>
+                <div className="grid grid-cols-2 text-[10px] text-gray-600 mb-1.5">
+                  <div>Accrued: <strong className="font-mono text-gray-800">{(employee.sickLeaveAccrued ?? 30)}d</strong></div>
+                  <div>Taken: <strong className="font-mono text-gray-800">{(employee.sickLeaveTaken ?? 0)}d</strong></div>
+                </div>
+                <div className="border-t border-dashed border-gray-200 pt-1.5 flex justify-between items-center text-[10.5px] font-bold text-gray-700">
+                  <span>Balance remaining:</span>
+                  <span className="font-mono text-red-950 bg-red-50/70 border border-red-105/30 px-1.5 py-0.5 rounded leading-none text-[10px]">
+                    {Math.max(0, (employee.sickLeaveAccrued ?? 30) - (employee.sickLeaveTaken ?? 0))} Days
+                  </span>
+                </div>
+              </div>
+
+              {/* Family Responsibility */}
+              <div className="flex flex-col justify-between sm:pl-1">
+                <div className="flex justify-between items-center mb-1">
+                  <span className="font-extrabold text-amber-900 text-[10px] uppercase tracking-wide">3. Family Respons.</span>
+                  <span className="font-mono text-[8px] text-gray-400">BCEA Sec 27</span>
+                </div>
+                <div className="grid grid-cols-2 text-[10px] text-gray-600 mb-1.5">
+                  <div>Accrued: <strong className="font-mono text-gray-800">{(employee.familyLeaveAccrued ?? 5)}d</strong></div>
+                  <div>Taken: <strong className="font-mono text-gray-800">{(employee.familyLeaveTaken ?? 0)}d</strong></div>
+                </div>
+                <div className="border-t border-dashed border-gray-200 pt-1.5 flex justify-between items-center text-[10.5px] font-bold text-gray-700">
+                  <span>Balance remaining:</span>
+                  <span className="font-mono text-amber-900 bg-amber-50/70 border border-amber-105/30 px-1.5 py-0.5 rounded leading-none text-[10px]">
+                    {Math.max(0, (employee.familyLeaveAccrued ?? 5) - (employee.familyLeaveTaken ?? 0))} Days
+                  </span>
+                </div>
               </div>
             </div>
 
@@ -568,11 +767,20 @@ export function PayslipPreview({
                   <span className="block mt-1 font-mono text-[8px] text-slate-500 uppercase">Signed: {signedDate} | Ref: NBS-{employee.idNumber ? employee.idNumber.slice(0, 6) : 'CONF'}</span>
                 </p>
               </div>
-              <div className="flex flex-col items-center gap-1 opacity-55 shrink-0">
-                <div className="w-9 h-9 border border-[#1B2A7E] rounded flex items-center justify-center text-[#1B2A7E] text-[7.5px] font-bold text-center leading-none">
-                  SARS<br/>OK
+              <div 
+                className="flex flex-col items-center gap-1 shrink-0 select-none"
+                style={{ opacity: stampOpacity }}
+                id="system-audit-log-stamp"
+              >
+                <div className="relative w-12 h-12 border-2 border-dashed border-[#1B2A7E] rounded-full flex flex-col items-center justify-center text-[#1B2A7E] font-sans font-bold text-center leading-none scale-105">
+                  <span className="text-[6px] uppercase tracking-tighter opacity-80 font-semibold">System</span>
+                  <span className="text-[8.5px] font-black tracking-tight text-[#1B2A7E]">AUDIT</span>
+                  <span className="text-[6.5px] font-extrabold text-[#E31D2B] tracking-widest">LOG</span>
+                  <span className="absolute -bottom-1 -right-1 bg-[#E31D2B] text-white text-[5.5px] font-black px-1 py-0.5 rounded-full border border-white uppercase tracking-widest leading-none scale-90">
+                    OK
+                  </span>
                 </div>
-                <span className="text-[7.5px] text-[#1B2A7E] font-black uppercase tracking-widest text-[7px]">VERIFIED</span>
+                <span className="text-[7px] text-[#1B2A7E] font-black uppercase tracking-widest mt-0.5">VERIFIED</span>
               </div>
             </div>
 
